@@ -124,8 +124,6 @@ struct Vec3Ref {
     }
 };
 
-soa::soa_vector<Vec3Ref> vecs(1000);
-vecs[0] = {3.f, 4.f, 0.f};     // length == 5
 vecs[0].normalize();           // mutates the SoA arrays directly
 vecs[1] += vecs[2];            // operator+= composes across slots
 ```
