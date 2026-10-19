@@ -1,20 +1,21 @@
-#include <chrono>
 #include <iostream>
 #include <format>
-#include <string>
+#include <vector>
+#include <chrono>
 
-#include "common.hpp"
-#include "../src/soa_cuda.hpp"
+#include "benchmark_common.hpp"
+#include "../src/cuda_common.hpp"
+
 
 struct Point
 {
-    float& x;
-    float& y;
-    float& z;
+    float x;
+    float y;
+    float z;
 
     std::string print() const
     {
-        return std::to_string(x)+"\t"+std::to_string(y)+"\t"+std::to_string(z);
+        return std::format("{}\t{}\t{}",x,y,z);
     }
 };
 
@@ -22,12 +23,13 @@ struct VertexRef
 {
     Point position;
     Point normal;
-    float& r_color;
-    float& g_color;
-    float& b_color;
-    float& a_color;
-    float& u;
-    float& v;
+    float r_color;
+    float g_color;
+    float b_color;
+    float a_color;
+    float u;
+    float v;
+    float padding[4];//align to 64 bytes
 
     void Init()
     {
@@ -48,8 +50,8 @@ struct VertexRef
         v=0;
     }
 
-    __device__ __host__
-    inline void move(float dx, float dy, float dz)
+    __host__ __device__
+    void move(float dx, float dy, float dz)
     {
         position.x+=dx;
         position.y+=dy;
@@ -57,15 +59,16 @@ struct VertexRef
     }
 };
 
-__global__ void move_kernel(soa::aosoa_iterator<VertexRef,32> vertices, size_t size, float dx, float dy, float dz)
+
+__global__ void move_kernel(VertexRef* veritces, size_t size, float dx,float dy,float dz)
 {
     auto i=blockIdx.x*blockDim.x+threadIdx.x;
     if (i<size)
     {
-        vertices[i].move(dx,dy,dz);
+        // printf("--%d  %f\n",i,veritces[i].position.x);
+        veritces[i].move(dx,dy,dz);
     }
 }
-
 
 int main()
 {
@@ -81,45 +84,43 @@ int main()
         for (int sample=0;sample<number_of_samples;++sample)
         {
             std::cout<<"Sample "<<sample<<"\n";
-
-            soa::aosoa_vector<VertexRef,32> vertices(N);
+            std::vector<VertexRef> vertices(N);
 
             //init position
-            for (int i = 0; i < N; ++i)
+            for (int i = 0; i < vertices.size(); ++i)
             {
                 vertices[i].Init();
                 vertices[i].position.x=i;
                 vertices[i].position.y=i*2;
                 vertices[i].position.z=i*3;
             }
-            //device copy
-            soa::cuda_device_aosoa<VertexRef,32> vertices_d(vertices);
-            CUDA_CHECK(cudaDeviceSynchronize());
+
+            //create device copy of data
+            VertexRef* vertices_d;
+            cudaMalloc(&vertices_d,sizeof(VertexRef)*N);
+            cudaMemcpy(vertices_d,vertices.data(),sizeof(VertexRef)*N,cudaMemcpyHostToDevice);
 
             float dx=10;
             float dy=20;
             float dz=30;
 
             auto start_time=std::chrono::high_resolution_clock::now();
-            for (int i = 0; i < N; ++i)
+            for (auto&& v:vertices)
             {
-                vertices[i].move(dx,dy,dz);
+                v.move(dx,dy,dz);
             }
-
             auto passed=std::chrono::high_resolution_clock::now()-start_time;
             std::cout<<"CPU time: "<<passed.count()/1'000'000.0<<"ms\n";
             cpu_sum_ms+=passed.count()/1'000'000.0;
-
-
+            
             cudaEvent_t start;
             cudaEvent_t finish;
             cudaEventCreate(&start);
             cudaEventCreate(&finish);
 
-            cudaDeviceSynchronize();
-            CUDA_CHECK(cudaEventRecord(start));
-            move_kernel<<<(N-1)/128+1,128>>>(vertices_d.begin(),N,dx,dy,dz);
-            CUDA_CHECK(cudaEventRecord(finish));
+            cudaEventRecord(start);
+            move_kernel<<<(N-1)/128+1,128>>>(vertices_d,N,dx,dy,dz);
+            cudaEventRecord(finish);
             CUDA_CHECK(cudaDeviceSynchronize());
 
             float milliseconds = 0;
@@ -129,6 +130,7 @@ int main()
 
             cudaEventDestroy(start);
             cudaEventDestroy(finish);
+            CUDA_CHECK(cudaFree(vertices_d));
         }
         std::cout<<"CPU average time: "<< cpu_sum_ms/number_of_samples <<"ms\n";
         std::cout<<"GPU average time: "<< gpu_sum_ms/number_of_samples <<"ms\n\n";

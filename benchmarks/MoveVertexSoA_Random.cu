@@ -1,8 +1,7 @@
 #include <chrono>
 #include <iostream>
 #include <format>
-#include <string>
-#include "common.hpp"
+#include "benchmark_common.hpp"
 
 #include "../src/soa_cuda.hpp"
 
@@ -14,7 +13,7 @@ struct Point
 
     std::string print() const
     {
-        return std::to_string(x)+"\t"+std::to_string(y)+"\t"+std::to_string(z);
+        return std::format("{}\t{}\t{}",x,y,z);
     }
 };
 
@@ -57,7 +56,7 @@ struct VertexRef
     }
 };
 
-__global__ void move_kernel(soa::aosoa_iterator<VertexRef,32> vertices, size_t size, float dx, float dy, float dz)
+__global__ void move_kernel(soa::soa_view<VertexRef> vertices, size_t size, float dx,float dy,float dz)
 {
     auto i=blockIdx.x*blockDim.x+threadIdx.x;
     if (i<size)
@@ -66,7 +65,6 @@ __global__ void move_kernel(soa::aosoa_iterator<VertexRef,32> vertices, size_t s
         vertices[i].move(dx,dy,dz);
     }
 }
-
 
 int main()
 {
@@ -83,18 +81,19 @@ int main()
         {
             std::cout<<"Sample "<<sample<<"\n";
 
-            soa::aosoa_vector<VertexRef,32> vertices(N);
+            soa::soa_vector<VertexRef> vertices(N);
 
             //init position
-            for (int i = 0; i < N; ++i)
+            for (int i = 0; i < vertices.size(); ++i)
             {
                 vertices[i].Init();
                 vertices[i].position.x=i;
                 vertices[i].position.y=i*2;
                 vertices[i].position.z=i*3;
             }
+
             //device copy
-            soa::cuda_device_aosoa<VertexRef,32> vertices_d(vertices);
+            soa::cuda_device_vector vertices_d(vertices);
             CUDA_CHECK(cudaDeviceSynchronize());
 
             float dx=10;
@@ -102,14 +101,15 @@ int main()
             float dz=30;
 
             auto start_time=std::chrono::high_resolution_clock::now();
+
             for (int i = 0; i < N; ++i)
             {
                 vertices[random_id(i,N)].move(dx,dy,dz);
             }
 
             auto passed=std::chrono::high_resolution_clock::now()-start_time;
-            std::cout<<"CPU time: "<<passed.count()/1'000'000.0<<"ms\n";
-            cpu_sum_ms+=passed.count()/1'000'000.0;
+            std::cout<<"CPU time: "<<static_cast<double>(passed.count())/1'000'000.0<<"ms\n";
+            cpu_sum_ms+=static_cast<double>(passed.count())/1'000'000.0;
 
 
             cudaEvent_t start;
@@ -119,13 +119,13 @@ int main()
 
             cudaDeviceSynchronize();
             CUDA_CHECK(cudaEventRecord(start));
-            move_kernel<<<(N-1)/128+1,128>>>(vertices_d.begin(),N,dx,dy,dz);
+            move_kernel<<<(N-1)/128+1,128>>>(vertices_d,N,dx,dy,dz);
             CUDA_CHECK(cudaEventRecord(finish));
             CUDA_CHECK(cudaDeviceSynchronize());
 
             float milliseconds = 0;
             cudaEventElapsedTime(&milliseconds, start, finish);
-            std::cout<<"GPU time: "<<milliseconds<<"ms\n";
+            std::cout<<"GPU time: "<<milliseconds<<"ms\n\n";
             gpu_sum_ms+=milliseconds;
 
             cudaEventDestroy(start);
@@ -134,6 +134,5 @@ int main()
         std::cout<<"CPU average time: "<< cpu_sum_ms/number_of_samples <<"ms\n";
         std::cout<<"GPU average time: "<< gpu_sum_ms/number_of_samples <<"ms\n\n";
     }
-
     return 0;
 }

@@ -53,6 +53,13 @@ TEST(SOA_VECTOR, IndexingAndReferences)
     GTEST_ASSERT_EQ(soa[5].a,1);
     GTEST_ASSERT_EQ(soa[5].b,2);
     GTEST_ASSERT_EQ(soa[5].nested1.n1,3);
+
+
+    //at
+    GTEST_ASSERT_EQ(soa.at(5).a,1);
+
+    //at should throw an exception when outside the range
+    EXPECT_THROW(soa.at(100).a=1,std::out_of_range);
 }
 
 TEST(SOA_VECTOR, ElementSnapshot)
@@ -146,7 +153,7 @@ TEST(SOA_VECTOR, AllocationCopyAndResize)
         GTEST_ASSERT_EQ(vec_copy[i].nested1.n2,-i);
     }
 
-    //clear
+    //move
     auto vec_moved=std::move(vec);
     GTEST_ASSERT_EQ(vec.size(),0);
     GTEST_ASSERT_EQ(vec.capacity(),0);
@@ -159,15 +166,34 @@ TEST(SOA_VECTOR, AllocationCopyAndResize)
     }
 
     vec_moved.clear();
+    GTEST_ASSERT_EQ(vec_moved.size(),0);
+    GTEST_ASSERT_NE(vec_moved.capacity(),0);
+    GTEST_ASSERT_EQ(vec_moved.empty(),true);
+
+    //create and move new vector
+    vec= soa::soa_vector<TypeRef>(100);
+    GTEST_ASSERT_EQ(vec.size(),100);
+    GTEST_ASSERT_GE(vec.capacity(),100);
+
+    vec.clear();
+    vec.shrink_to_fit();
     GTEST_ASSERT_EQ(vec.size(),0);
     GTEST_ASSERT_EQ(vec.capacity(),0);
+
+    vec.resize(100);
+    GTEST_ASSERT_EQ(vec.size(),100);
+    GTEST_ASSERT_GE(vec.capacity(),100);
+
+    //access last element
+    vec.at(99).a=1;
+    GTEST_ASSERT_EQ(vec.at(99).a,1);
 }
 
 TEST(SOA_VECTOR,IteratorsAndStd)
 {
     soa::soa_vector<TypeRef> vec(250);
     int i=0;
-    for (auto&& v:vec)//foreach
+    for (auto&& v:vec)//foreach loop
     {
         v.b = i;//init .b in ascending order
         v.nested2.n2=2*i;
@@ -181,10 +207,10 @@ TEST(SOA_VECTOR,IteratorsAndStd)
         GTEST_ASSERT_EQ(vec[i].nested2.n2, 2*i );
     }
 
-    //sort in descending by .b
+    //sort in descending order by .b
     std::sort(vec.begin(),vec.end(),[](TypeRef l, TypeRef r){return l.b>r.b;});
 
-    //verify sorting
+    //verify data was sorted
     for (i=0;i<vec.size();++i)
     {
         auto j=vec.size()-i-1;//reversed index

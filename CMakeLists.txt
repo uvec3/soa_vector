@@ -6,5 +6,5 @@ set(CMAKE_CXX_STANDARD 20)
 
 
 add_subdirectory(tests)
-add_subdirectory(performance_tests)
+add_subdirectory(benchmarks)
 add_subdirectory(examples)

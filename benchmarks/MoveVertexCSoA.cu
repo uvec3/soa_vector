@@ -2,7 +2,7 @@
 #include <iostream>
 #include <format>
 
-#include "common.hpp"
+#include "benchmark_common.hpp"
 #include "../src/soa_cuda.hpp"
 
 struct Point

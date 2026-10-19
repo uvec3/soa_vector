@@ -2,7 +2,7 @@
 #include <format>
 #include <vector>
 #include <chrono>
-#include "common.hpp"
+#include "benchmark_common.hpp"
 
 #include "../src/cuda_common.hpp"
 

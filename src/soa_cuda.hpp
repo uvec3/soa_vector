@@ -105,7 +105,6 @@ namespace soa
         CUDA_CHECK(cudaMemcpy(ptr_dst,ptr_src,bytes,cudaMemcpyHostToDevice));
     }
 
-
     template<typename View>
     using cuda_device_vector=soa_vector<View,CudaDeviceAllocator>;
 
@@ -114,7 +113,6 @@ namespace soa
 
     template<typename View>
     using cuda_unified_vector=soa_vector<View,CudaUnifiedAllocator>;
-
 
     template<typename View,size_t internal_array_size=32>
     using cuda_device_aosoa = aosoa_vector<View,internal_array_size, CudaDeviceAllocator>;

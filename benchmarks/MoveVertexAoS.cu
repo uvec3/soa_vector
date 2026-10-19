@@ -2,8 +2,8 @@
 #include <format>
 #include <vector>
 #include <chrono>
-#include "common.hpp"
 
+#include "benchmark_common.hpp"
 #include "../src/cuda_common.hpp"
 
 
@@ -59,13 +59,12 @@ struct VertexRef
 };
 
 
-
 __global__ void move_kernel(VertexRef* veritces, size_t size, float dx,float dy,float dz)
 {
     auto i=blockIdx.x*blockDim.x+threadIdx.x;
     if (i<size)
     {
-        i=random_id(i,size);
+        // printf("--%d  %f\n",i,veritces[i].position.x);
         veritces[i].move(dx,dy,dz);
     }
 }
@@ -86,7 +85,6 @@ int main()
             std::cout<<"Sample "<<sample<<"\n";
             std::vector<VertexRef> vertices(N);
 
-
             //init position
             for (int i = 0; i < vertices.size(); ++i)
             {
@@ -106,9 +104,9 @@ int main()
             float dz=30;
 
             auto start_time=std::chrono::high_resolution_clock::now();
-            for (int i = 0; i < vertices.size(); ++i)
+            for (auto&& v:vertices)
             {
-                vertices[random_id(i,N)].move(dx,dy,dz);
+                v.move(dx,dy,dz);
             }
             auto passed=std::chrono::high_resolution_clock::now()-start_time;
             std::cout<<"CPU time: "<<passed.count()/1'000'000.0<<"ms\n";

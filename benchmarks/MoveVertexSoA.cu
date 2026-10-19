@@ -1,17 +1,15 @@
+#include <chrono>
 #include <iostream>
 #include <format>
-#include <vector>
-#include <chrono>
 
-#include "common.hpp"
-#include "../src/cuda_common.hpp"
-
+#include "benchmark_common.hpp"
+#include "../src/soa_cuda.hpp"
 
 struct Point
 {
-    float x;
-    float y;
-    float z;
+    float& x;
+    float& y;
+    float& z;
 
     std::string print() const
     {
@@ -23,12 +21,12 @@ struct VertexRef
 {
     Point position;
     Point normal;
-    float r_color;
-    float g_color;
-    float b_color;
-    float a_color;
-    float u;
-    float v;
+    float& r_color;
+    float& g_color;
+    float& b_color;
+    float& a_color;
+    float& u;
+    float& v;
 
     void Init()
     {
@@ -49,8 +47,8 @@ struct VertexRef
         v=0;
     }
 
-    __host__ __device__
-    void move(float dx, float dy, float dz)
+    __device__ __host__
+    __forceinline__  void move(float dx, float dy, float dz)
     {
         position.x+=dx;
         position.y+=dy;
@@ -58,14 +56,12 @@ struct VertexRef
     }
 };
 
-
-__global__ void move_kernel(VertexRef* veritces, size_t size, float dx,float dy,float dz)
+__global__ void move_kernel(soa::soa_view<VertexRef> vertices, size_t size, float dx,float dy,float dz)
 {
     auto i=blockIdx.x*blockDim.x+threadIdx.x;
     if (i<size)
     {
-        // printf("--%d  %f\n",i,veritces[i].position.x);
-        veritces[i].move(dx,dy,dz);
+        vertices[i].move(dx,dy,dz);
     }
 }
 
@@ -83,7 +79,8 @@ int main()
         for (int sample=0;sample<number_of_samples;++sample)
         {
             std::cout<<"Sample "<<sample<<"\n";
-            std::vector<VertexRef> vertices(N);
+
+            soa::soa_vector<VertexRef> vertices(N);
 
             //init position
             for (int i = 0; i < vertices.size(); ++i)
@@ -94,23 +91,24 @@ int main()
                 vertices[i].position.z=i*3;
             }
 
-            //create device copy of data
-            VertexRef* vertices_d;
-            cudaMalloc(&vertices_d,sizeof(VertexRef)*N);
-            cudaMemcpy(vertices_d,vertices.data(),sizeof(VertexRef)*N,cudaMemcpyHostToDevice);
+            //device copy
+            soa::cuda_device_vector vertices_d(vertices);
+            CUDA_CHECK(cudaDeviceSynchronize());
 
             float dx=10;
             float dy=20;
             float dz=30;
 
             auto start_time=std::chrono::high_resolution_clock::now();
-            for (auto&& v:vertices)
+
+            for (int i = 0; i < N; ++i)
             {
-                v.move(dx,dy,dz);
+                vertices[i].move(dx,dy,dz);
             }
+
             auto passed=std::chrono::high_resolution_clock::now()-start_time;
-            std::cout<<"CPU time: "<<passed.count()/1'000'000.0<<"ms\n";
-            cpu_sum_ms+=passed.count()/1'000'000.0;
+            std::cout<<"CPU time: "<<static_cast<double>(passed.count())/1'000'000.0<<"ms\n";
+            cpu_sum_ms+=static_cast<double>(passed.count())/1'000'000.0;
 
 
             cudaEvent_t start;
@@ -118,23 +116,22 @@ int main()
             cudaEventCreate(&start);
             cudaEventCreate(&finish);
 
-            cudaEventRecord(start);
+            cudaDeviceSynchronize();
+            CUDA_CHECK(cudaEventRecord(start));
             move_kernel<<<(N-1)/128+1,128>>>(vertices_d,N,dx,dy,dz);
-            cudaEventRecord(finish);
+            CUDA_CHECK(cudaEventRecord(finish));
             CUDA_CHECK(cudaDeviceSynchronize());
 
             float milliseconds = 0;
             cudaEventElapsedTime(&milliseconds, start, finish);
-            std::cout<<"GPU time: "<<milliseconds<<"ms\n";
+            std::cout<<"GPU time: "<<milliseconds<<"ms\n\n";
             gpu_sum_ms+=milliseconds;
 
             cudaEventDestroy(start);
             cudaEventDestroy(finish);
-            CUDA_CHECK(cudaFree(vertices_d));
         }
         std::cout<<"CPU average time: "<< cpu_sum_ms/number_of_samples <<"ms\n";
         std::cout<<"GPU average time: "<< gpu_sum_ms/number_of_samples <<"ms\n\n";
     }
-
     return 0;
 }

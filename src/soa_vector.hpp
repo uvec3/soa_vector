@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iterator>
+#include <stdexcept>
 #include "utility"
 #include "type_traits"
 #include "tuple"
@@ -287,8 +288,6 @@ namespace detail
         }
     };
 
-
-
      struct AnyLeaf {
          template < typename T >
          requires IsLeaf< T >
@@ -425,6 +424,7 @@ namespace soa
     };
 
 
+    //type that can hold a single element. It is needed to make some std algorithm like std::sort to work
     template <typename TReference>
     struct soa_element_snapshot
     {
@@ -536,7 +536,6 @@ namespace soa
     };
 
 
-
     template <typename TReference>
     struct soa_iterator
     {
@@ -544,10 +543,10 @@ namespace soa
         size_t m_index;
 
         using iterator_category = std::random_access_iterator_tag;
-        using value_type = soa_element_snapshot<TReference>;
-        using difference_type = std::ptrdiff_t;
-        // using pointer = RefWrapper<TReference>*;
-        using reference = RefWrapper<TReference>;
+        using value_type        = soa_element_snapshot<TReference>;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = void; // proxy reference — no raw pointer
+        using reference         = RefWrapper<TReference>;
 
         CUDA_HOST_DEVICE soa_iterator() = default;
 
@@ -589,12 +588,12 @@ namespace soa
         CUDA_HOST_DEVICE soa_iterator& operator+=(difference_type n) { m_index += n; return *this; }
         CUDA_HOST_DEVICE soa_iterator& operator-=(difference_type n) { m_index -= n; return *this; }
 
-        CUDA_HOST_DEVICE soa_iterator operator+(difference_type n) const { 
+        CUDA_HOST_DEVICE soa_iterator operator+(difference_type n) const {
             soa_iterator temp = *this;
             temp.m_index += n;
-            return temp; 
+            return temp;
         }
-        CUDA_HOST_DEVICE soa_iterator operator-(difference_type n) const { 
+        CUDA_HOST_DEVICE soa_iterator operator-(difference_type n) const {
             soa_iterator temp = *this;
             temp.m_index -= n;
             return temp;
@@ -602,8 +601,9 @@ namespace soa
         CUDA_HOST_DEVICE friend soa_iterator operator+(difference_type n, const soa_iterator& it) { return it + n; }
         CUDA_HOST_DEVICE difference_type operator-(const soa_iterator& other) const { return static_cast<difference_type>(m_index) - static_cast<difference_type>(other.m_index); }
 
-        CUDA_HOST_DEVICE  reference operator[](difference_type n) const { return *(*this + n); }
+        CUDA_HOST_DEVICE reference operator[](difference_type n) const { return *(*this + n); }
     };
+
 
     template <typename R, typename A>
     class soa_vector;
@@ -616,9 +616,14 @@ namespace soa
         size_t m_size{};
 
 
-        CUDA_HOST_DEVICE size_t size()
+        CUDA_HOST_DEVICE size_t size() const noexcept
         {
             return  m_size;
+        }
+
+        CUDA_HOST_DEVICE bool empty() const noexcept
+        {
+            return m_size == 0;
         }
 
         CUDA_HOST_DEVICE constexpr TReference operator[](size_t index) const
@@ -641,6 +646,11 @@ namespace soa
         {
             return soa_iterator<TReference>((void**)m_data, m_size);
         }
+
+        soa_iterator<TReference> begin()  const { return begin(); }
+        soa_iterator<TReference> end()    const { return end(); }
+        soa_iterator<TReference> cbegin() const { return begin(); }
+        soa_iterator<TReference> cend()   const { return end(); }
 
         void copy_from( const soa_view& other)
         {
@@ -674,6 +684,18 @@ namespace soa
         Allocator m_allocator;
 
     public:
+        // ------------------------------------------------------------------
+        // Standard type aliases
+        // ------------------------------------------------------------------
+        using value_type      = soa_element_snapshot<TReference>;
+        using reference       = RefWrapper<TReference>;
+        using const_reference = RefWrapper<TReference>;
+        using size_type       = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using iterator        = soa_iterator<TReference>;
+        using const_iterator  = soa_iterator<TReference>;
+        using allocator_type  = Allocator;
+
         template<typename R,typename A>
         friend class soa_vector;
 
@@ -723,9 +745,10 @@ namespace soa
             }
         }
 
-        soa_vector& operator=(const soa_vector& other)//copy assignment
+        soa_vector& operator=(const soa_vector& other) //copy assignment
         {
-            printf("operator=\n");
+            if (this == &other)
+                return *this;
             resize(other.m_size);
             if (other.m_size > 0) {
                 auto callback = [&]<std::size_t I, typename T>() {
@@ -754,7 +777,7 @@ namespace soa
         {
             if (this == &other)
                 return *this;
-            clear();
+            clear_data();
             for (size_t i = 0; i < detail::find_arity<TReference>(); ++i) {
                 m_data[i] = other.m_data[i];
                 other.m_data[i] = nullptr;
@@ -777,36 +800,74 @@ namespace soa
             }
         }
 
-        //reference wrapper to allow assignment and swap operations
-        constexpr RefWrapper<TReference> operator[](size_t index)
+        // ------------------------------------------------------------------
+        // Element access
+        // ------------------------------------------------------------------
+
+        /// Mutable element proxy (no bounds check)
+        [[nodiscard]] inline reference operator[](size_type index)
         {
             auto callback = [&]< std::size_t I, typename T >() -> T& {
                 T* ptr = (T*)(m_data[I]) + index;
                 return *ptr;
             };
-
             return init_struct_recursive<decltype(callback), TReference>(callback);
         }
 
-        size_t size()
+        /// Read-only element proxy (no bounds check)
+        [[nodiscard]] inline const_reference operator[](size_type index) const
         {
-            return m_size;
+            auto callback = [&]< std::size_t I, typename T >() -> T& {
+                T* ptr = reinterpret_cast<T*>(m_data[I]) + index;
+                return *ptr;
+            };
+            return init_struct_recursive<decltype(callback), TReference>(callback);
         }
 
-        size_t capacity()
+        /// Mutable element proxy with bounds check
+        [[nodiscard]] reference at(size_type index)
         {
-            return m_capacity;
+            if (index >= m_size)
+                throw std::out_of_range("soa_vector::at: index out of range");
+            return (*this)[index];
         }
 
-        soa_iterator<TReference> begin()
+        /// Read-only element proxy with bounds check
+        [[nodiscard]] const_reference at(size_type index) const
         {
-            return soa_iterator<TReference>((void**)m_data, 0);
+            if (index >= m_size)
+                throw std::out_of_range("soa_vector::at: index out of range");
+            return (*this)[index];
         }
 
-        soa_iterator<TReference> end()
-        {
-            return soa_iterator<TReference>((void**)m_data, m_size);
-        }
+        [[nodiscard]] reference       front()       { SOA_DEBUG_ASSERT(!empty()); return (*this)[0]; }
+        [[nodiscard]] const_reference front() const { SOA_DEBUG_ASSERT(!empty()); return (*this)[0]; }
+
+        [[nodiscard]] reference       back()        { SOA_DEBUG_ASSERT(!empty()); return (*this)[m_size - 1]; }
+        [[nodiscard]] const_reference back()  const { SOA_DEBUG_ASSERT(!empty()); return (*this)[m_size - 1]; }
+
+        // ------------------------------------------------------------------
+        // Capacity
+        // ------------------------------------------------------------------
+
+        [[nodiscard]] size_type size()     const noexcept { return m_size; }
+        [[nodiscard]] size_type capacity() const noexcept { return m_capacity; }
+        [[nodiscard]] bool      empty()    const noexcept { return m_size == 0; }
+
+        // ------------------------------------------------------------------
+        // Iterators
+        // ------------------------------------------------------------------
+
+        iterator       begin()        { return iterator      ((void**)m_data,              0); }
+        iterator       end()          { return iterator      ((void**)m_data,         m_size); }
+        const_iterator begin()  const { return const_iterator((const void**)m_data,        0); }
+        const_iterator end()    const { return const_iterator((const void**)m_data,   m_size); }
+        const_iterator cbegin() const { return begin(); }
+        const_iterator cend()   const { return end();   }
+
+        // ------------------------------------------------------------------
+        // SOA-specific helpers
+        // ------------------------------------------------------------------
 
         soa_view<TReference> view()
         {
@@ -834,14 +895,73 @@ namespace soa
             return result;
         }
 
+        // ------------------------------------------------------------------
+        // Modifiers
+        // ------------------------------------------------------------------
+
         void reserve(size_t capacity)
+        {
+            if (capacity>m_capacity)
+                set_capacity(capacity);
+        }
+
+        void resize(size_t size)
+        {
+            if (m_size!=size)
+            {
+                if (size>m_capacity)
+                {
+                    set_capacity(size);
+                }
+                m_size=size;
+            }
+        }
+
+        template<float extension_rate=2.f>
+        size_t allocate(size_t number_of_elements=1)
+        {
+            static_assert(extension_rate>=1);
+            auto start=m_size;
+            m_size=m_size+number_of_elements;
+            if (m_size>m_capacity)
+            {
+                set_capacity( static_cast<size_t>(m_size*extension_rate));
+            }
+            return start;
+        }
+
+        void clear()
+        {
+            m_size=0;
+        }
+
+        void shrink_to_fit()
+        {
+            set_capacity(m_size);
+        }
+
+    private:
+        void clear_data()
+        {
+            if (m_capacity>0) {
+                auto callback = [&]<std::size_t I, typename T>() {
+                    m_allocator.free(m_data[I]);
+                    m_data[I] = nullptr;
+                };
+                iterate_struct_recursive<decltype(callback), TReference>(callback);
+            }
+            m_size=0;
+            m_capacity=0;
+        }
+
+        void set_capacity(size_t capacity)
         {
             if (m_capacity==capacity)
                 return;
 
             if (capacity==0)
             {
-                clear();
+                clear_data();
             }
             else if (m_capacity==0)
             {
@@ -875,49 +995,6 @@ namespace soa
             m_capacity=capacity;
             if (m_size>m_capacity)
                 m_size=m_capacity;
-        }
-
-        void resize(size_t size)
-        {
-            if (m_size!=size)
-            {
-                if (size>m_capacity)
-                {
-                    reserve(size);
-                }
-                m_size=size;
-            }
-        }
-
-        template<float extension_rate=2.f>
-        size_t allocate(size_t number_of_elements=1)
-        {
-            static_assert(extension_rate>=1);
-            auto start=m_size;
-            m_size=m_size+number_of_elements;
-            if (m_size>m_capacity)
-            {
-                reserve( static_cast<size_t>(m_size*extension_rate));
-            }
-            return start;
-        }
-
-        void clear()
-        {
-            if (m_capacity>0) {
-                auto callback = [&]<std::size_t I, typename T>() {
-                    m_allocator.free(m_data[I]);
-                    m_data[I] = nullptr;
-                };
-                iterate_struct_recursive<decltype(callback), TReference>(callback);
-            }
-            m_size=0;
-            m_capacity=0;
-        }
-
-        void shrink_to_fit()
-        {
-            reserve(m_size);
         }
     };
 }
