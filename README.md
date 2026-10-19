@@ -107,7 +107,9 @@ Three patterns are demonstrated in [`examples/oop_methods.cpp`](examples/oop_met
 
 ```cpp
 struct Vec3Ref {
-    float& x, &y, &z;
+    float& x;
+    float& y;
+    float& z;
 
     float length() const { return std::sqrt(x*x + y*y + z*z); }
 
@@ -123,7 +125,7 @@ struct Vec3Ref {
 };
 
 soa::soa_vector<Vec3Ref> vecs(1000);
-vecs[0] = {3.f, 4.f, 0.f};   // length == 5
+vecs[0] = {3.f, 4.f, 0.f};     // length == 5
 vecs[0].normalize();           // mutates the SoA arrays directly
 vecs[1] += vecs[2];            // operator+= composes across slots
 ```
