@@ -81,17 +81,17 @@ std::sort(vertices.begin(), vertices.end(),
 soa::cuda_device_vector<VertexRef> d_vertices(vertices);
 
 // Launch a kernel — pass the view by value
-__global__ void move_kernel(soa::soa_view<VertexRef> verts, size_t n,
+__global__ void move_kernel(soa::soa_view<VertexRef> verts, //<-- use soa_view to pass shallow copy
                             float dx, float dy, float dz) {
     auto i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) {
+    if (i < verts.size) {
         verts[i].position.x += dx;
         verts[i].position.y += dy;
         verts[i].position.z += dz;
     }
 }
 
-move_kernel<<<(N+127)/128, 128>>>(d_vertices, N, 1.f, 0.f, 0.f);
+move_kernel<<<(N+127)/128, 128>>>(d_vertices, 1.f, 0.f, 0.f);
 ```
 
 ---
