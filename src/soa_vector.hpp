@@ -637,20 +637,12 @@ namespace soa
             return init_struct_recursive<decltype(callback), TReference>(callback);
         }
 
-        soa_iterator<TReference> begin()
-        {
-            return soa_iterator<TReference>((void**)m_data, 0);
-        }
-
-        soa_iterator<TReference> end()
-        {
-            return soa_iterator<TReference>((void**)m_data, m_size);
-        }
-
-        soa_iterator<TReference> begin()  const { return begin(); }
-        soa_iterator<TReference> end()    const { return end(); }
-        soa_iterator<TReference> cbegin() const { return begin(); }
-        soa_iterator<TReference> cend()   const { return end(); }
+        soa_iterator<TReference> begin(){return soa_iterator<TReference>((void**)m_data, 0);}
+        soa_iterator<TReference> end()  {return soa_iterator<TReference>((void**)m_data, m_size);}
+        soa_iterator<TReference> begin()  const { return soa_iterator<TReference>((void**)m_data, 0); }
+        soa_iterator<TReference> end()    const { return soa_iterator<TReference>((void**)m_data, m_size); }
+        soa_iterator<TReference> cbegin() const { return soa_iterator<TReference>((void**)m_data, 0);}
+        soa_iterator<TReference> cend()   const { return soa_iterator<TReference>((void**)m_data, m_size); }
 
         void copy_from( const soa_view& other)
         {
@@ -860,10 +852,10 @@ namespace soa
 
         iterator       begin()        { return iterator      ((void**)m_data,              0); }
         iterator       end()          { return iterator      ((void**)m_data,         m_size); }
-        const_iterator begin()  const { return const_iterator((const void**)m_data,        0); }
-        const_iterator end()    const { return const_iterator((const void**)m_data,   m_size); }
-        const_iterator cbegin() const { return begin(); }
-        const_iterator cend()   const { return end();   }
+        const_iterator begin()  const { return iterator      ((void**)m_data,              0); }
+        const_iterator end()    const { return iterator      ((void**)m_data,         m_size); }
+        const_iterator cbegin() const { return iterator      ((void**)m_data,              0); }
+        const_iterator cend()   const { return iterator      ((void**)m_data,         m_size);  }
 
         // ------------------------------------------------------------------
         // SOA-specific helpers

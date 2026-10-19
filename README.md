@@ -10,6 +10,7 @@ Instead of storing objects contiguously (*Array of Structures*, AoS), this libra
 
 - **Zero boilerplate** — define your element type as a plain struct of references; the library reflects its fields at compile time using C++20 structured bindings
 - **Nested structs** — fields can be nested aggregates, flattened automatically (up to 32 members per level)
+- **Methods on reference types** — add computed properties, mutating helpers, and operators directly to your reference struct; OOP style is fully preserved
 - **`std::vector`-like API** — `operator[]`, `at()`, `front()`, `back()`, `begin()`/`end()`, `size()`, `capacity()`, `reserve()`, `resize()`, `clear()`, `shrink_to_fit()`
 - **Random-access iterators** — compatible with `std::sort`, range-based `for`, and other STL algorithms
 - **`soa_view`** — lightweight non-owning view / slice into any SoA container
@@ -81,18 +82,113 @@ std::sort(vertices.begin(), vertices.end(),
 soa::cuda_device_vector<VertexRef> d_vertices(vertices);
 
 // Launch a kernel — pass the view by value
-__global__ void move_kernel(soa::soa_view<VertexRef> verts, //<-- use soa_view to pass shallow copy
+__global__ void move_kernel(soa::soa_view<VertexRef> verts,
                             float dx, float dy, float dz) {
     auto i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < verts.size) {
+    if (i < verts.size()) {
         verts[i].position.x += dx;
         verts[i].position.y += dy;
         verts[i].position.z += dz;
     }
 }
 
-move_kernel<<<(N+127)/128, 128>>>(d_vertices, 1.f, 0.f, 0.f);
+move_kernel<<<(d_vertices.size()-1)/128+1, 128>>>(d_vertices, 1.f, 0.f, 0.f);
 ```
+
+---
+
+## OOP with Reference Types
+
+Reference structs are plain C++ structs — they can carry **methods, operators, and static helpers** just like any other type. The proxy returned by `operator[]` *is* that struct (with each reference bound into the SoA arrays), so calling a method on it directly manipulates the in-place SoA data.
+
+Three patterns are demonstrated in [`examples/oop_methods.cpp`](examples/oop_methods.cpp):
+
+### Pattern 1 — computed properties and mutation helpers
+
+```cpp
+struct Vec3Ref {
+    float& x, &y, &z;
+
+    float length() const { return std::sqrt(x*x + y*y + z*z); }
+
+    void normalize() {
+        float inv = 1.f / length();
+        x *= inv; y *= inv; z *= inv;
+    }
+
+    Vec3Ref& operator+=(Vec3Ref other) {
+        x += other.x; y += other.y; z += other.z;
+        return *this;
+    }
+};
+
+soa::soa_vector<Vec3Ref> vecs(1000);
+vecs[0] = {3.f, 4.f, 0.f};   // length == 5
+vecs[0].normalize();           // mutates the SoA arrays directly
+vecs[1] += vecs[2];            // operator+= composes across slots
+```
+
+### Pattern 2 — domain logic on nested reference types
+
+```cpp
+struct ParticleRef {
+    Vec3Ref position;
+    Vec3Ref velocity;
+    float&  mass;
+    float&  charge;
+
+    float kinetic_energy() const {
+        float v2 = velocity.x*velocity.x + velocity.y*velocity.y + velocity.z*velocity.z;
+        return 0.5f * mass * v2;
+    }
+
+    // Symplectic Euler step
+    void integrate(float dt, float fx, float fy, float fz) {
+        position.x += velocity.x * dt;
+        position.y += velocity.y * dt;
+        position.z += velocity.z * dt;
+        velocity.x += (fx / mass) * dt;
+        velocity.y += (fy / mass) * dt;
+        velocity.z += (fz / mass) * dt;
+    }
+
+    float coulomb_force(ParticleRef other) const {
+        constexpr float k = 8.99e9f;
+        float dx = other.position.x - position.x;
+        float dy = other.position.y - position.y;
+        float dz = other.position.z - position.z;
+        return k * charge * other.charge / (dx*dx + dy*dy + dz*dz + 1e-10f);
+    }
+};
+
+soa::soa_vector<ParticleRef> particles(N);
+particles[0].integrate(dt, 0.f, -9.81f, 0.f);   // reads/writes SoA in-place
+float F = particles[0].coulomb_force(particles[1]);
+```
+
+### Pattern 3 — thin domain wrapper with named constructors
+
+```cpp
+class ParticleSystem {
+public:
+    // Named factory — hides the SoA initialisation loop
+    static ParticleSystem uniform(size_t n, float mass, float charge,
+                                  float vx, float vy, float vz);
+
+    void  step(float dt, float fx, float fy, float fz); // bulk integrate
+    float total_kinetic_energy() const;                  // aggregate query
+
+private:
+    soa::soa_vector<ParticleRef> m_particles;
+};
+
+auto sys = ParticleSystem::uniform(1'000'000, 1.f, 1.f, 0.f, 1.f, 0.f);
+sys.step(0.01f, 0.f, -9.81f, 0.f);
+float ke = sys.total_kinetic_energy();
+```
+
+> [!NOTE]
+> Because `operator[]` returns the reference struct by value (its members are references into the arrays), methods called on it operate directly on the SoA storage — no copies, no indirection.
 
 ---
 
@@ -157,7 +253,6 @@ A CUDA-managed-memory allocator lives in `src/soa_cuda.hpp`.
 ---
 
 
-
 ## Project Layout
 
 ```
@@ -173,6 +268,7 @@ tests/
   soa_vector_cuda_tests.cu
 benchmarks/               # MoveVertex benchmarks: AoS, SoA, AoSoA, aligned, random access
 examples/
+  oop_methods.cpp         # Methods / operators / domain wrappers on reference types
 ```
 
 ---

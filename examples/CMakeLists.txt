@@ -1,0 +1,2 @@
+add_executable(oop_methods oop_methods.cpp)
+target_compile_features(oop_methods PRIVATE cxx_std_20)
