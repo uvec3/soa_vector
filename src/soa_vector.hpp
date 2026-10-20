@@ -548,7 +548,7 @@ namespace soa
         using pointer           = void; // proxy reference — no raw pointer
         using reference         = RefWrapper<TReference>;
 
-        CUDA_HOST_DEVICE soa_iterator() = default;
+        soa_iterator() = default;
 
         CUDA_HOST_DEVICE soa_iterator(void* const* data, size_t index) : m_index(index)
         {
