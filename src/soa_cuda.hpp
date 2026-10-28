@@ -93,16 +93,44 @@ namespace soa
     };
 
 
-    //transfer form device to host
-    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, DefaultAllocator allocatorDst, CudaDeviceAllocator allocatorSrc)
+    // Transfer from device to host (DefaultAllocator / CudaHostAllocator)
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, DefaultAllocator, CudaDeviceAllocator)
     {
-        CUDA_CHECK(cudaMemcpy(ptr_dst,ptr_src,bytes,cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyDeviceToHost));
     }
 
-    //transfer form host to device
-    inline void transfer_data(void* ptr_dst,const void* ptr_src, size_t bytes,CudaDeviceAllocator  allocatorDst, DefaultAllocator allocatorSrc)
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, CudaHostAllocator, CudaDeviceAllocator)
     {
-        CUDA_CHECK(cudaMemcpy(ptr_dst,ptr_src,bytes,cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyDeviceToHost));
+    }
+
+    // Transfer from host (DefaultAllocator / CudaHostAllocator) to device
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, CudaDeviceAllocator, DefaultAllocator)
+    {
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyHostToDevice));
+    }
+
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, CudaDeviceAllocator, CudaHostAllocator)
+    {
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyHostToDevice));
+    }
+
+    // Transfer between host allocators (DefaultAllocator <-> CudaHostAllocator)
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, DefaultAllocator, CudaHostAllocator)
+    {
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyHostToHost));
+    }
+
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, CudaHostAllocator, DefaultAllocator)
+    {
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyHostToHost));
+    }
+
+    // Fallback for transfers involving CudaUnifiedAllocator (or any other UVA-compatible pair)
+    template <typename AllocatorDst, typename AllocatorSrc>
+    inline void transfer_data(void* ptr_dst, const void* ptr_src, size_t bytes, AllocatorDst, AllocatorSrc)
+    {
+        CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyDefault));
     }
 
     template<typename View>

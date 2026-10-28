@@ -10,6 +10,8 @@
 
 #define SOA_DEBUG_ASSERT(arg) assert(arg)
 
+namespace soa
+{
 namespace detail
 {
     // Trait to identify leaf nodes (scalar references)
@@ -392,8 +394,6 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
     }(std::make_index_sequence<N>{});
 }
 
-namespace soa
-{
     struct DefaultAllocator
     {
         static  void* alloc(size_t bytes)
@@ -441,12 +441,12 @@ namespace soa
 
         soa_element_snapshot() = default;
 
-        soa_element_snapshot(const TReference& source)
+        CUDA_HOST_DEVICE soa_element_snapshot(const TReference& source)
         {
             *this = source;
         }
 
-        soa_element_snapshot& operator=(const TReference& source)
+        CUDA_HOST_DEVICE soa_element_snapshot& operator=(const TReference& source)
         {
             auto flat_source = detail::tie_flat(source);
             [&]<std::size_t... Is>(std::index_sequence<Is...>)
@@ -456,7 +456,7 @@ namespace soa
             return *this;
         }
 
-        operator TReference() const
+        CUDA_HOST_DEVICE operator TReference() const
         {
             auto callback = [this]<std::size_t I, typename T>() -> T&
             {
@@ -469,7 +469,7 @@ namespace soa
     template <typename TReference>
     struct RefWrapper : TReference
     {
-        RefWrapper& operator=(const RefWrapper& other)
+        CUDA_HOST_DEVICE RefWrapper& operator=(const RefWrapper& other)
         {
             auto callback = []< std::size_t I, typename T >(T& dst, const T& src)
             {
@@ -480,13 +480,13 @@ namespace soa
             return *this;
         }
 
-        RefWrapper& operator=(RefWrapper&& other) noexcept
+        CUDA_HOST_DEVICE RefWrapper& operator=(RefWrapper&& other) noexcept
         {
             *this = other;
             return *this;
         };
 
-        RefWrapper& operator=(const soa_element_snapshot<TReference>& other)
+        CUDA_HOST_DEVICE RefWrapper& operator=(const soa_element_snapshot<TReference>& other)
         {
             const TReference source = other;
             auto callback = []<std::size_t I, typename T>(T& dst, const T& src)
@@ -500,16 +500,16 @@ namespace soa
         RefWrapper(const RefWrapper& other) = default;
         RefWrapper(RefWrapper&& other) = default;
 
-        RefWrapper(const TReference& other) : TReference(other)
+        CUDA_HOST_DEVICE RefWrapper(const TReference& other) : TReference(other)
         {
         };
 
-        RefWrapper(TReference&& other) : TReference(std::move(other))
+        CUDA_HOST_DEVICE RefWrapper(TReference&& other) : TReference(std::move(other))
         {
         };
 
 
-        friend void swap(RefWrapper& a,RefWrapper& b) noexcept
+        CUDA_HOST_DEVICE friend void swap(RefWrapper& a,RefWrapper& b) noexcept
         {
             auto callback = []< std::size_t I, typename T >(T& a, T& b)
             {
@@ -521,7 +521,7 @@ namespace soa
             iterate_struct_pair_recursive<decltype(callback), TReference>(callback, a, b);
         }
 
-        friend void swap(RefWrapper&& a,RefWrapper&& b) noexcept
+        CUDA_HOST_DEVICE friend void swap(RefWrapper&& a,RefWrapper&& b) noexcept
         {
             auto callback = []< std::size_t I, typename T >(T& a, T& b)
             {
@@ -637,14 +637,14 @@ namespace soa
             return init_struct_recursive<decltype(callback), TReference>(callback);
         }
 
-        soa_iterator<TReference> begin(){return soa_iterator<TReference>((void**)m_data, 0);}
-        soa_iterator<TReference> end()  {return soa_iterator<TReference>((void**)m_data, m_size);}
-        soa_iterator<TReference> begin()  const { return soa_iterator<TReference>((void**)m_data, 0); }
-        soa_iterator<TReference> end()    const { return soa_iterator<TReference>((void**)m_data, m_size); }
-        soa_iterator<TReference> cbegin() const { return soa_iterator<TReference>((void**)m_data, 0);}
-        soa_iterator<TReference> cend()   const { return soa_iterator<TReference>((void**)m_data, m_size); }
+        CUDA_HOST_DEVICE soa_iterator<TReference> begin(){return soa_iterator<TReference>((void**)m_data, 0);}
+        CUDA_HOST_DEVICE soa_iterator<TReference> end()  {return soa_iterator<TReference>((void**)m_data, m_size);}
+        CUDA_HOST_DEVICE soa_iterator<TReference> begin()  const { return soa_iterator<TReference>((void**)m_data, 0); }
+        CUDA_HOST_DEVICE soa_iterator<TReference> end()    const { return soa_iterator<TReference>((void**)m_data, m_size); }
+        CUDA_HOST_DEVICE soa_iterator<TReference> cbegin() const { return soa_iterator<TReference>((void**)m_data, 0);}
+        CUDA_HOST_DEVICE soa_iterator<TReference> cend()   const { return soa_iterator<TReference>((void**)m_data, m_size); }
 
-        void copy_from( const soa_view& other)
+        CUDA_HOST_DEVICE void copy_from( const soa_view& other)
         {
             SOA_DEBUG_ASSERT(m_size>=other.m_size);
 
@@ -747,6 +747,34 @@ namespace soa
                     m_allocator.copy(m_data[I], other.m_data[I], other.m_size * sizeof(T));
                 };
                 iterate_struct_recursive<decltype(callback), TReference>(callback);
+            }
+            return *this;
+        }
+
+        template <typename OtherAllocator>
+        soa_vector& operator=(const soa_vector<TReference, OtherAllocator>& other)
+        {
+            if constexpr (std::is_same_v<OtherAllocator, Allocator>)
+            {
+                if (this == &other)
+                    return *this;
+                resize(other.m_size);
+                if (other.m_size > 0) {
+                    auto callback = [&]<std::size_t I, typename T>() {
+                        m_allocator.copy(m_data[I], other.m_data[I], other.m_size * sizeof(T));
+                    };
+                    iterate_struct_recursive<decltype(callback), TReference>(callback);
+                }
+            }
+            else
+            {
+                resize(other.m_size);
+                if (other.m_size > 0) {
+                    auto callback = [&]<std::size_t I, typename T>() {
+                        transfer_data(m_data[I], other.m_data[I], other.m_size * sizeof(T), m_allocator, other.m_allocator);
+                    };
+                    iterate_struct_recursive<decltype(callback), TReference>(callback);
+                }
             }
             return *this;
         }

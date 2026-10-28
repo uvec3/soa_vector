@@ -14,10 +14,9 @@ Instead of storing objects contiguously (*Array of Structures*, AoS), this libra
 - **`std::vector`-like API** — `operator[]`, `at()`, `front()`, `back()`, `begin()`/`end()`, `size()`, `capacity()`, `reserve()`, `resize()`, `clear()`, `shrink_to_fit()`
 - **Random-access iterators** — compatible with `std::sort`, range-based `for`, and other STL algorithms
 - **`soa_view`** — lightweight non-owning view / slice into any SoA container
-- **`soa_pool`** — SoA container with a free-list allocator for stable slot allocation and reuse
 - **`aosoa_vector`** — Array-of-Structures-of-Arrays hybrid with a configurable inner block size (default 32), balancing locality and vectorisation
 - **Custom allocators** — swap in any allocator via a simple static interface (`alloc`, `free`, `copy`, optional `realloc`)
-- **CUDA support** — `soa_view` and iterators carry `__host__ __device__` annotations; `soa_cuda.hpp` provides `cuda_device_vector` for seamless GPU transfers
+- **CUDA support** — `soa_view` and iterators carry `__host__ __device__` annotations; `soa_cuda.hpp` provides `cuda_device_vector`, `cuda_host_vector`, and `cuda_unified_vector` for seamless GPU transfers
 
 ---
 
@@ -216,19 +215,17 @@ float ke = sys.total_kinetic_energy();
 
 Non-owning, copyable, `__device__`-safe slice. Passed by value to GPU kernels. Supports `operator[]`, `size()`, `empty()`, `begin()`/`end()`, and `copy_from()`.
 
-### `soa_pool<TReference, Allocator>`
-
-Extends `soa_vector` with a free-list (`LogicalAllocatorOffset`) for stable O(1) slot allocation and reuse:
-
-```cpp
-soa_pool<VertexRef> pool(1024);
-size_t slot = pool.alloc_element();   // allocate one slot
-pool.free(slot);                      // return slot to pool
-```
-
 ### `soa::aosoa_vector<TReference, BlockSize, Allocator>`
 
 AoSoA layout — data is split into fixed-size blocks of `BlockSize` (default 32) elements. Each block stores its fields contiguously, providing SIMD-friendly inner loops while limiting cache-line waste at block boundaries.
+
+### CUDA Containers (`src/soa_cuda.hpp`)
+
+Type aliases backed by `CudaDeviceAllocator`, `CudaHostAllocator` (pinned host memory), and `CudaUnifiedAllocator` (managed memory with device-preferred residency hints):
+
+- `soa::cuda_device_vector<TReference>` / `soa::cuda_device_aosoa<TReference, BlockSize>`
+- `soa::cuda_host_vector<TReference>` / `soa::cuda_host_aosoa<TReference, BlockSize>`
+- `soa::cuda_unified_vector<TReference>` / `soa::cuda_unified_aosoa<TReference, BlockSize>`
 
 ---
 
@@ -248,7 +245,7 @@ struct MyAllocator {
 soa::soa_vector<VertexRef, MyAllocator> vec(1024);
 ```
 
-A CUDA-managed-memory allocator lives in `src/soa_cuda.hpp`.
+Device, pinned-host, and unified-memory CUDA allocators live in `src/soa_cuda.hpp`.
 
 ---
 
@@ -259,10 +256,8 @@ A CUDA-managed-memory allocator lives in `src/soa_cuda.hpp`.
 src/
   soa_vector.hpp          # Core SoA container & reflection engine
   aosoa_vector.hpp        # AoSoA container
-  soa_pool.hpp            # Free-list SoA pool
-  soa_cuda.hpp            # CUDA device vector & managed allocator
+  soa_cuda.hpp            # CUDA device/host/unified vectors & allocators
   cuda_common.hpp         # CUDA_HOST_DEVICE macro & CUDA_CHECK helper
-  LogicalAllocators/      # Offset-based logical allocator (used by soa_pool)
 tests/
   soa_vector_basic_tests.cpp
   soa_vector_cuda_tests.cu
