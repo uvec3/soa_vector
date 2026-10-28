@@ -668,7 +668,7 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
     template<typename TReference, typename Allocator=DefaultAllocator>
     class soa_vector
     {
-    private:
+    protected:
         static constexpr int number_of_fields=detail::find_arity<TReference>();
         void* m_data[number_of_fields];
         size_t m_capacity;

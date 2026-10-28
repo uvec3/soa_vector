@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime_api.h>
+#include <cuda/std/tuple>
 #include <iostream>
 
 #include "aosoa_vector.hpp"
@@ -133,14 +134,65 @@ namespace soa
         CUDA_CHECK(cudaMemcpy(ptr_dst, ptr_src, bytes, cudaMemcpyDefault));
     }
 
-    template<typename View>
-    using cuda_device_vector=soa_vector<View,CudaDeviceAllocator>;
+    template <typename TReference, typename Allocator>
+    class cuda_soa_vector : public soa_vector<TReference, Allocator>
+    {
+        using Base = soa_vector<TReference, Allocator>;
+
+    public:
+        cuda_soa_vector(size_t size = 0, Allocator&& allocator = Allocator{})
+            : Base(size, std::forward<Allocator>(allocator))
+        {
+        }
+
+        cuda_soa_vector(const cuda_soa_vector& other) = default;
+        cuda_soa_vector(cuda_soa_vector&& other) noexcept = default;
+        cuda_soa_vector& operator=(const cuda_soa_vector& other) = default;
+        cuda_soa_vector& operator=(cuda_soa_vector&& other) noexcept = default;
+
+        template <typename OtherAllocator>
+        cuda_soa_vector(const soa_vector<TReference, OtherAllocator>& other)
+            : Base(other)
+        {
+        }
+
+        using Base::operator=;
+
+        auto get_tuple(size_t offset = 0)
+        {
+            using FlatTuple = decltype(detail::tie_flat(std::declval<TReference&>()));
+            constexpr std::size_t N = std::tuple_size_v<FlatTuple>;
+
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+                return cuda::std::make_tuple(
+                    (static_cast<std::remove_reference_t<std::tuple_element_t<Is, FlatTuple>>*>(this->m_data[Is]) + offset)...
+                );
+            }(std::make_index_sequence<N>{});
+        }
+
+        auto get_tuple(size_t offset = 0) const
+        {
+            using FlatTuple = decltype(detail::tie_flat(std::declval<TReference&>()));
+            constexpr std::size_t N = std::tuple_size_v<FlatTuple>;
+
+            return [&]<std::size_t... Is>(std::index_sequence<Is...>)
+            {
+                return cuda::std::make_tuple(
+                    (static_cast<const std::remove_reference_t<std::tuple_element_t<Is, FlatTuple>>*>(this->m_data[Is]) + offset)...
+                );
+            }(std::make_index_sequence<N>{});
+        }
+    };
 
     template<typename View>
-    using cuda_host_vector=soa_vector<View,CudaHostAllocator>;
+    using cuda_device_vector=cuda_soa_vector<View,CudaDeviceAllocator>;
 
     template<typename View>
-    using cuda_unified_vector=soa_vector<View,CudaUnifiedAllocator>;
+    using cuda_host_vector=cuda_soa_vector<View,CudaHostAllocator>;
+
+    template<typename View>
+    using cuda_unified_vector=cuda_soa_vector<View,CudaUnifiedAllocator>;
 
     template<typename View,size_t internal_array_size=32>
     using cuda_device_aosoa = aosoa_vector<View,internal_array_size, CudaDeviceAllocator>;
