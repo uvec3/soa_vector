@@ -304,6 +304,9 @@ namespace detail
 
     template < typename T, std::size_t N = 0, std::size_t Max = 64 >
     CUDA_HOST_DEVICE constexpr std::size_t find_arity() {
+        if constexpr (IsLeaf< T >) {
+            return 1;
+        } else
         if constexpr (test_construct< T >(std::make_index_sequence< N >{})) {
             return N;
         } else if constexpr (N < Max) {
@@ -329,26 +332,40 @@ namespace detail
 
 // Overload 1: Create from scratch (No reference)
 template <typename Callback, typename View>
-CUDA_HOST_DEVICE constexpr View init_struct_recursive(Callback callback)
+CUDA_HOST_DEVICE constexpr decltype(auto) init_struct_recursive(Callback callback)
 {
-    constexpr std::size_t N = detail::find_arity<View>();
-    return [&]< std::size_t... Is >(std::index_sequence<Is...>)
+    if constexpr (detail::IsLeaf<View>)
     {
-        // Notice how clean this is now without the comma operator
-        return View{detail::IndexedLeafProvider<Callback, Is>{callback}...};
-    }(std::make_index_sequence<N>{});
+        return (callback.template operator()<0, std::remove_cvref_t<View>>());
+    }
+    else
+    {
+        constexpr std::size_t N = detail::find_arity<View>();
+        return [&]< std::size_t... Is >(std::index_sequence<Is...>)
+        {
+            // Notice how clean this is now without the comma operator
+            return View{detail::IndexedLeafProvider<Callback, Is>{callback}...};
+        }(std::make_index_sequence<N>{});
+    }
 }
 
 // Overload 2: Create from source (1 reference)
 template <typename Callback, typename View>
-CUDA_HOST_DEVICE constexpr View init_struct_recursive_from(Callback callback, View& src)
+CUDA_HOST_DEVICE constexpr decltype(auto) init_struct_recursive_from(Callback callback, View& src)
 {
-    auto flat_src = detail::tie_flat(src);
-    constexpr std::size_t N = std::tuple_size_v<decltype(flat_src)>;
-    return [&]< std::size_t... Is >(std::index_sequence<Is...>)
+    if constexpr (detail::IsLeaf<View>)
     {
-        return View{detail::BoundIndexedLeafProvider<Callback, decltype(flat_src), Is>{callback, flat_src}...};
-    }(std::make_index_sequence<N>{});
+        return (callback.template operator()<0, std::remove_cvref_t<View>>(src));
+    }
+    else
+    {
+        auto flat_src = detail::tie_flat(src);
+        constexpr std::size_t N = std::tuple_size_v<decltype(flat_src)>;
+        return [&]< std::size_t... Is >(std::index_sequence<Is...>)
+        {
+            return View{detail::BoundIndexedLeafProvider<Callback, decltype(flat_src), Is>{callback, flat_src}...};
+        }(std::make_index_sequence<N>{});
+    }
 }
 
 // Overload 3: Iterate over a single view
@@ -456,7 +473,9 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             return *this;
         }
 
-        CUDA_HOST_DEVICE operator TReference() const
+        using reference_type = std::conditional_t<detail::IsLeaf<TReference>, TReference&, TReference>;
+
+        CUDA_HOST_DEVICE operator reference_type() const
         {
             auto callback = [this]<std::size_t I, typename T>() -> T&
             {
@@ -543,10 +562,10 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         size_t m_index;
 
         using iterator_category = std::random_access_iterator_tag;
-        using value_type        = soa_element_snapshot<TReference>;
+        using value_type        = std::conditional_t<detail::IsLeaf<TReference>, TReference, soa_element_snapshot<TReference>>;
         using difference_type   = std::ptrdiff_t;
-        using pointer           = void; // proxy reference — no raw pointer
-        using reference         = RefWrapper<TReference>;
+        using pointer           = std::conditional_t<detail::IsLeaf<TReference>, TReference*, void>; // proxy reference — no raw pointer in SoA mode
+        using reference         = std::conditional_t<detail::IsLeaf<TReference>, TReference&, RefWrapper<TReference>>;
 
         soa_iterator() = default;
 
@@ -626,7 +645,7 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             return m_size == 0;
         }
 
-        CUDA_HOST_DEVICE constexpr TReference operator[](size_t index) const
+        CUDA_HOST_DEVICE constexpr decltype(auto) operator[](size_t index) const
         {
             auto callback = [&]< std::size_t I, typename T >() -> T&
             {
@@ -663,6 +682,46 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         friend class soa_vector;
     };
 
+    // Allocator-aware host span for subrange operations (such as cross-allocator copy_from)
+    template <typename TReference, typename Allocator = DefaultAllocator>
+    struct soa_span : soa_view<TReference>
+    {
+        Allocator m_allocator{};
+
+        constexpr soa_span() = default;
+
+        constexpr soa_span(const soa_view<TReference>& v, Allocator alloc = Allocator{})
+            : soa_view<TReference>(v), m_allocator(std::move(alloc))
+        {
+        }
+
+        template <typename OtherAllocator>
+        void copy_from(const soa_span<TReference, OtherAllocator>& other)
+        {
+            SOA_DEBUG_ASSERT(this->m_size >= other.m_size);
+            if (other.m_size == 0)
+                return;
+
+            if constexpr (std::is_same_v<OtherAllocator, Allocator>)
+            {
+                auto callback = [&]<std::size_t I, typename T>() {
+                    m_allocator.copy(this->m_data[I], other.m_data[I], other.m_size * sizeof(T));
+                };
+                iterate_struct_recursive<decltype(callback), TReference>(callback);
+            }
+            else
+            {
+                auto callback = [&]<std::size_t I, typename T>() {
+                    transfer_data(this->m_data[I], other.m_data[I], other.m_size * sizeof(T), m_allocator, other.m_allocator);
+                };
+                iterate_struct_recursive<decltype(callback), TReference>(callback);
+            }
+        }
+
+        template <typename OtherAllocator>
+        void copy_from(const soa_vector<TReference, OtherAllocator>& other);
+    };
+
 
 
     template<typename TReference, typename Allocator=DefaultAllocator>
@@ -679,9 +738,9 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         // ------------------------------------------------------------------
         // Standard type aliases
         // ------------------------------------------------------------------
-        using value_type      = soa_element_snapshot<TReference>;
-        using reference       = RefWrapper<TReference>;
-        using const_reference = RefWrapper<TReference>;
+        using value_type      = std::conditional_t<detail::IsLeaf<TReference>, TReference, soa_element_snapshot<TReference>>;
+        using reference       = std::conditional_t<detail::IsLeaf<TReference>, TReference&, RefWrapper<TReference>>;
+        using const_reference = std::conditional_t<detail::IsLeaf<TReference>, const TReference&, RefWrapper<TReference>>;
         using size_type       = std::size_t;
         using difference_type = std::ptrdiff_t;
         using iterator        = soa_iterator<TReference>;
@@ -889,7 +948,7 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         // SOA-specific helpers
         // ------------------------------------------------------------------
 
-        soa_view<TReference> view()
+        soa_view<TReference> view() const
         {
             soa_view<TReference> result;
             result.m_size=m_size;
@@ -899,12 +958,7 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             return result;
         }
 
-        operator soa_view<TReference>()
-        {
-            return view();
-        }
-
-        soa_view<TReference> range(size_t offset, size_t size)
+        soa_view<TReference> view(size_t offset, size_t size) const
         {
             soa_view<TReference> result;
             result.m_size=size;
@@ -913,6 +967,21 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             };
             iterate_struct_recursive<decltype(callback), TReference>(callback);
             return result;
+        }
+
+        operator soa_view<TReference>() const
+        {
+            return view();
+        }
+
+        soa_span<TReference, Allocator> span() const
+        {
+            return soa_span<TReference, Allocator>(view(), m_allocator);
+        }
+
+        soa_span<TReference, Allocator> range(size_t offset, size_t size) const
+        {
+            return soa_span<TReference, Allocator>(view(offset, size), m_allocator);
         }
 
         // ------------------------------------------------------------------
@@ -1017,4 +1086,11 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
                 m_size=m_capacity;
         }
     };
+
+    template <typename TReference, typename Allocator>
+    template <typename OtherAllocator>
+    void soa_span<TReference, Allocator>::copy_from(const soa_vector<TReference, OtherAllocator>& other)
+    {
+        copy_from(other.span());
+    }
 }

@@ -101,3 +101,125 @@ TEST(SOA_VECTOR_CUDA, ThrustSortByKey)
         GTEST_ASSERT_EQ(vec_h[i].pos.z, static_cast<float>(orig * 4));
     }
 }
+
+struct PositionAoS
+{
+    float x;
+    float y;
+    float z;
+
+    __device__ __host__
+    void move(float dx, float dy, float dz)
+    {
+        x += dx;
+        y += dy;
+        z += dz;
+    }
+};
+
+struct TypeAoS
+{
+    float a;
+    int b;
+    PositionAoS pos;
+};
+
+__global__ void kernel_aos(soa::soa_view<TypeAoS> vec)
+{
+    auto i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < vec.size())
+    {
+        vec[i].pos.move(1, 1, 1);
+    }
+}
+
+TEST(SOA_VECTOR_CUDA, BasicAoS)
+{
+    soa::soa_vector<TypeAoS> vec_h(1000);
+
+    for (int i = 0; i < vec_h.size(); ++i)
+    {
+        vec_h[i].pos.x = i;
+        vec_h[i].pos.y = 2 * i;
+        vec_h[i].pos.z = 3 * i;
+    }
+
+    soa::cuda_device_vector vec_d = vec_h;
+
+    kernel_aos<<<(vec_d.size() - 1) / 128 + 1, 128>>>(vec_d);
+
+    vec_h = vec_d;
+
+    for (int i = 0; i < vec_h.size(); ++i)
+    {
+        GTEST_ASSERT_EQ(vec_h[i].pos.x, i + 1);
+        GTEST_ASSERT_EQ(vec_h[i].pos.y, 2 * i + 1);
+        GTEST_ASSERT_EQ(vec_h[i].pos.z, 3 * i + 1);
+    }
+}
+
+TEST(SOA_VECTOR_CUDA, ThrustSortByKeyAoS)
+{
+    constexpr int N = 1000;
+    soa::soa_vector<TypeAoS> vec_h(N);
+    std::vector<int> keys_h(N);
+
+    for (int i = 0; i < N; ++i)
+    {
+        keys_h[i] = N - 1 - i;
+        vec_h[i].a = static_cast<float>(i);
+        vec_h[i].b = i * 10;
+        vec_h[i].pos.x = static_cast<float>(i * 2);
+        vec_h[i].pos.y = static_cast<float>(i * 3);
+        vec_h[i].pos.z = static_cast<float>(i * 4);
+    }
+
+    soa::cuda_device_vector<TypeAoS> vec_d = vec_h;
+    thrust::device_vector<int> keys_d(keys_h.begin(), keys_h.end());
+
+    auto values_begin = thrust::make_zip_iterator(vec_d.get_tuple());
+    thrust::sort_by_key(thrust::device, keys_d.begin(), keys_d.end(), values_begin);
+
+    vec_h = vec_d;
+
+    for (int i = 0; i < N; ++i)
+    {
+        int orig = N - 1 - i;
+        GTEST_ASSERT_EQ(vec_h[i].a, static_cast<float>(orig));
+        GTEST_ASSERT_EQ(vec_h[i].b, orig * 10);
+        GTEST_ASSERT_EQ(vec_h[i].pos.x, static_cast<float>(orig * 2));
+        GTEST_ASSERT_EQ(vec_h[i].pos.y, static_cast<float>(orig * 3));
+        GTEST_ASSERT_EQ(vec_h[i].pos.z, static_cast<float>(orig * 4));
+    }
+}
+
+TEST(SOA_VECTOR_CUDA, SpanCrossAllocatorCopy)
+{
+    soa::cuda_device_vector<TypeAoS> d_src(10);
+    soa::soa_vector<TypeAoS> h_src(10);
+    for (int i = 0; i < 10; ++i)
+    {
+        h_src[i] = TypeAoS{static_cast<float>(i), i * 10, {static_cast<float>(i), static_cast<float>(i * 2), static_cast<float>(i * 3)}};
+    }
+    d_src = h_src;
+
+    // Modify subrange [2, 7) on device using view(offset, size)
+    kernel_aos<<<1, 32>>>(d_src.view(2, 5));
+
+    // Copy d_src into a larger device vector at offset 20 via soa_span
+    soa::cuda_device_vector<TypeAoS> d_dst(40);
+    d_dst.range(20, 10).copy_from(d_src);
+
+    // Download subrange [20, 30) back to host pool at offset 5 via soa_span
+    soa::soa_vector<TypeAoS> h_dst(20);
+    h_dst.range(5, 10).copy_from(d_dst.range(20, 10));
+
+    for (int i = 0; i < 10; ++i)
+    {
+        float delta = (i >= 2 && i < 7) ? 1.0f : 0.0f;
+        GTEST_ASSERT_EQ(h_dst[5 + i].b, i * 10);
+        GTEST_ASSERT_EQ(h_dst[5 + i].pos.x, static_cast<float>(i) + delta);
+        GTEST_ASSERT_EQ(h_dst[5 + i].pos.y, static_cast<float>(i * 2) + delta);
+        GTEST_ASSERT_EQ(h_dst[5 + i].pos.z, static_cast<float>(i * 3) + delta);
+    }
+}
