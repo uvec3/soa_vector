@@ -682,17 +682,39 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         friend class soa_vector;
     };
 
-    // Allocator-aware host span for subrange operations (such as cross-allocator copy_from)
+    // Allocator-aware host span for subrange operations (such as cross-allocator copy_from / operator=)
     template <typename TReference, typename Allocator = DefaultAllocator>
     struct soa_span : soa_view<TReference>
     {
         Allocator m_allocator{};
 
         constexpr soa_span() = default;
+        constexpr soa_span(const soa_span&) = default;
+        constexpr soa_span(soa_span&&) noexcept = default;
 
         constexpr soa_span(const soa_view<TReference>& v, Allocator alloc = Allocator{})
             : soa_view<TReference>(v), m_allocator(std::move(alloc))
         {
+        }
+
+        soa_span& operator=(const soa_span& other)
+        {
+            copy_from(other);
+            return *this;
+        }
+
+        template <typename OtherAllocator>
+        soa_span& operator=(const soa_span<TReference, OtherAllocator>& other)
+        {
+            copy_from(other);
+            return *this;
+        }
+
+        template <typename OtherAllocator>
+        soa_span& operator=(const soa_vector<TReference, OtherAllocator>& other)
+        {
+            copy_from(other);
+            return *this;
         }
 
         template <typename OtherAllocator>
@@ -838,6 +860,20 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             return *this;
         }
 
+        template <typename OtherAllocator>
+        soa_vector(const soa_span<TReference, OtherAllocator>& other) : soa_vector{other.m_size, Allocator{}}
+        {
+            span().copy_from(other);
+        }
+
+        template <typename OtherAllocator>
+        soa_vector& operator=(const soa_span<TReference, OtherAllocator>& other)
+        {
+            resize(other.m_size);
+            span().copy_from(other);
+            return *this;
+        }
+
         //move
         soa_vector(soa_vector&& other) noexcept
             : m_capacity(other.m_capacity),
@@ -969,6 +1005,12 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
             return result;
         }
 
+        soa_view<TReference> view(size_t offset) const
+        {
+            SOA_DEBUG_ASSERT(offset <= m_size);
+            return view(offset, m_size - offset);
+        }
+
         operator soa_view<TReference>() const
         {
             return view();
@@ -982,6 +1024,11 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
         soa_span<TReference, Allocator> range(size_t offset, size_t size) const
         {
             return soa_span<TReference, Allocator>(view(offset, size), m_allocator);
+        }
+
+        soa_span<TReference, Allocator> range(size_t offset) const
+        {
+            return soa_span<TReference, Allocator>(view(offset), m_allocator);
         }
 
         // ------------------------------------------------------------------

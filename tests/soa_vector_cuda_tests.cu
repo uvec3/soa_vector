@@ -206,13 +206,24 @@ TEST(SOA_VECTOR_CUDA, SpanCrossAllocatorCopy)
     // Modify subrange [2, 7) on device using view(offset, size)
     kernel_aos<<<1, 32>>>(d_src.view(2, 5));
 
-    // Copy d_src into a larger device vector at offset 20 via soa_span
+    // Copy d_src into a larger device vector at offset 20 via soa_span operator= and range(offset)
     soa::cuda_device_vector<TypeAoS> d_dst(40);
-    d_dst.range(20, 10).copy_from(d_src);
+    d_dst.range(20) = d_src;
 
-    // Download subrange [20, 30) back to host pool at offset 5 via soa_span
+    // Download subrange [20, 30) back to host pool at offset 5 via soa_span operator=
     soa::soa_vector<TypeAoS> h_dst(20);
-    h_dst.range(5, 10).copy_from(d_dst.range(20, 10));
+    h_dst.range(5) = d_dst.range(20, 10);
+
+    // Also test assigning and constructing a vector directly from a span
+    soa::soa_vector<TypeAoS> h_slice;
+    h_slice = d_dst.range(20, 10);
+    GTEST_ASSERT_EQ(h_slice.size(), 10u);
+
+    soa::soa_vector<TypeAoS> h_constructed = d_dst.range(22, 5);
+    GTEST_ASSERT_EQ(h_constructed.size(), 5u);
+
+    // Same-allocator span-to-span assignment
+    h_dst.range(15) = h_slice.range(0, 5);
 
     for (int i = 0; i < 10; ++i)
     {
@@ -221,5 +232,11 @@ TEST(SOA_VECTOR_CUDA, SpanCrossAllocatorCopy)
         GTEST_ASSERT_EQ(h_dst[5 + i].pos.x, static_cast<float>(i) + delta);
         GTEST_ASSERT_EQ(h_dst[5 + i].pos.y, static_cast<float>(i * 2) + delta);
         GTEST_ASSERT_EQ(h_dst[5 + i].pos.z, static_cast<float>(i * 3) + delta);
+        GTEST_ASSERT_EQ(h_slice[i].pos.x, static_cast<float>(i) + delta);
+    }
+    for (int i = 0; i < 5; ++i)
+    {
+        GTEST_ASSERT_EQ(h_dst[15 + i].b, h_slice[i].b);
+        GTEST_ASSERT_EQ(h_constructed[i].b, h_slice[2 + i].b);
     }
 }
