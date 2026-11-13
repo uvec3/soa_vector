@@ -632,7 +632,7 @@ CUDA_HOST_DEVICE constexpr void iterate_struct_recursive(Callback callback)
     struct soa_view
     {
         void* m_data[detail::find_arity< TReference >()];
-        size_t m_size{};
+        size_t m_size;
 
 
         CUDA_HOST_DEVICE size_t size() const noexcept
